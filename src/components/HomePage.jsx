@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom'
+
 export default function HomePage() {
   return (
     <div className="relative min-h-screen bg-slate-950 text-white">
@@ -42,12 +44,12 @@ export default function HomePage() {
             >
               Log in
             </a>
-            <a
-              href="#start"
+            <Link
+              to="/interaction"
               className="inline-flex items-center justify-center rounded-xl bg-white px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-white/90"
             >
               Tell Symptoms
-            </a>
+            </Link>
           </div>
         </div>
       </header>
@@ -75,12 +77,12 @@ export default function HomePage() {
 
             {/* Buttons - center aligned */}
             <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
-              <a
-                href="#start"
+              <Link
+                to="/interaction"
                 className="inline-flex items-center justify-center rounded-2xl bg-indigo-300 px-10 py-4 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 hover:bg-indigo-400"
               >
                 Find the Right Doctor
-              </a>
+              </Link>
              
             </div>
 
