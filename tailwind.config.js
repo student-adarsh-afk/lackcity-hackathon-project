@@ -6,10 +6,13 @@ export default {
   ],
   theme: {
     extend: {
-        fontFamily: {
-            heading: ['Manrope', 'sans-serif'],
-      body: ['Inter', 'sans-serif'],
-    },
+      screens: {
+        'xs': '475px',
+      },
+      fontFamily: {
+        heading: ['Manrope', 'sans-serif'],
+        body: ['Inter', 'sans-serif'],
+      },
     },
   },
   plugins: [],
