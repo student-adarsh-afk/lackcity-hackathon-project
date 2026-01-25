@@ -44,6 +44,32 @@ export default function Interaction({ isDarkMode = false }) {
   const recognitionRef = useRef(null)
   const finalTranscriptRef = useRef('')
 
+  // Quick symptom chips data
+  const quickSymptoms = [
+    "Headache",
+    "Fever",
+    "Chest Pain",
+    "Cough",
+    "Fatigue",
+    "Dizziness",
+    "Nausea",
+    "Shortness of Breath"
+  ]
+  const riskSymptoms = ["Chest Pain", "Shortness of Breath"]
+
+  // Handle chip click - adds symptom to input
+  const handleChipClick = (symptom) => {
+    setInput(prev => {
+      if (!prev.trim()) {
+        return `I have ${symptom.toLowerCase()}`
+      }
+      if (prev.toLowerCase().includes(symptom.toLowerCase())) {
+        return prev // avoid duplicates
+      }
+      return `${prev}, ${symptom.toLowerCase()}`
+    })
+  }
+
   const baseBgClass = isDarkMode ? 'bg-black' : 'bg-slate-950'
   const overlayBgClass = isDarkMode ? 'bg-black/80' : 'bg-slate-950/70'
   const orbPrimary = isDarkMode ? 'bg-neutral-900/40' : 'bg-sky-500/20'
@@ -614,6 +640,52 @@ export default function Interaction({ isDarkMode = false }) {
             </motion.button>
           </motion.div>
         </motion.form>
+
+        {/* Quick Symptom Chips */}
+        <motion.div
+          className="w-full max-w-2xl mt-4"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.5 }}
+        >
+          <p className="text-sm text-white/50 mb-3">Quick Symptoms</p>
+          <div className="flex flex-wrap gap-2">
+            {quickSymptoms.map((symptom, index) => {
+              const isRisk = riskSymptoms.includes(symptom)
+              const isSelected = input.toLowerCase().includes(symptom.toLowerCase())
+              
+              return (
+                <motion.button
+                  key={symptom}
+                  type="button"
+                  onClick={() => handleChipClick(symptom)}
+                  className={`px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
+                    isSelected
+                      ? 'bg-sky-500/30 text-sky-300 ring-1 ring-sky-500/50'
+                      : 'bg-slate-800/80 text-white/80 hover:bg-slate-700/80 hover:text-white'
+                  } ${
+                    isRisk && !isSelected
+                      ? 'border border-brand-red/50 hover:border-brand-red'
+                      : !isSelected ? 'border border-white/10' : ''
+                  }`}
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.3, delay: 0.5 + index * 0.05 }}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  {isRisk && (
+                    <span className="mr-1 text-brand-red">⚠</span>
+                  )}
+                  {symptom}
+                  {isSelected && (
+                    <span className="ml-1.5 text-sky-400">✓</span>
+                  )}
+                </motion.button>
+              )
+            })}
+          </div>
+        </motion.div>
 
         {/* Error Message */}
         <AnimatePresence>
