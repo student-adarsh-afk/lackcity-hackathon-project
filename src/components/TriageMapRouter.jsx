@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Link } from 'react-router-dom'
+import { getHeatmapData } from '../services/searchHistory'
 
 export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
   const mapRef = useRef(null)
@@ -8,6 +9,8 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
   const mapInstanceRef = useRef(null)
   const markersRef = useRef([])
   const directionsRendererRef = useRef(null)
+  const heatmapLayerRef = useRef(null)
+  const fastestRouteRendererRef = useRef(null)
 
   const [userLocation, setUserLocation] = useState(null)
   const [places, setPlaces] = useState([])
@@ -27,6 +30,18 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
   const [liveLocation, setLiveLocation] = useState(null)
   const watchIdRef = useRef(null)
   const userMarkerRef = useRef(null)
+
+  // Map mode state: 'hospitals' or 'heatmap'
+  const [mapMode, setMapMode] = useState('hospitals')
+  const [heatmapData, setHeatmapData] = useState([])
+  const [heatmapLoading, setHeatmapLoading] = useState(false)
+  const heatmapCacheRef = useRef({ data: null, timestamp: null })
+
+  // Fastest route state
+  const [fastestHospitalId, setFastestHospitalId] = useState(null)
+  const [fastestRouteInfo, setFastestRouteInfo] = useState(null)
+  const [isFindingFastest, setIsFindingFastest] = useState(false)
+  const fastestRouteCacheRef = useRef({ data: null, timestamp: null })
 
   // Sort options
   const sortOptions = [
@@ -55,14 +70,14 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
   const sortedPlaces = getSortedPlaces()
 
   // Dark mode theme helpers
-  const panelBgClass = isDarkMode ? 'bg-neutral-950' : 'bg-white'
-  const panelTextClass = isDarkMode ? 'text-white' : 'text-gray-900'
-  const panelSubtextClass = isDarkMode ? 'text-white/60' : 'text-gray-500'
-  const cardBgClass = isDarkMode ? 'bg-neutral-900' : 'bg-gray-50'
-  const cardHoverClass = isDarkMode ? 'hover:bg-neutral-800' : 'hover:bg-gray-100'
-  const buttonBgClass = isDarkMode ? 'bg-black hover:bg-neutral-900 ring-1 ring-white/10' : 'bg-sky-500 hover:bg-sky-400'
-  const ringNeutral = isDarkMode ? 'ring-white/10' : 'ring-gray-200'
-  const borderClass = isDarkMode ? 'border-white/10' : 'border-gray-200'
+  const panelBgClass = isDarkMode ? 'bg-brand-dark' : 'bg-white'
+  const panelTextClass = isDarkMode ? 'text-brand-light' : 'text-gray-900'
+  const panelSubtextClass = isDarkMode ? 'text-brand-light/60' : 'text-gray-500'
+  const cardBgClass = isDarkMode ? 'bg-brand-dark' : 'bg-white'
+  const cardHoverClass = isDarkMode ? 'hover:bg-brand-dark/80' : 'hover:bg-gray-50'
+  const buttonBgClass = isDarkMode ? 'bg-brand-blue hover:bg-brand-blue/90' : 'bg-brand-blue hover:bg-brand-blue/90'
+  const ringNeutral = isDarkMode ? 'ring-brand-light/10' : 'ring-gray-200'
+  const borderClass = isDarkMode ? 'border-brand-light/10' : 'border-gray-200'
 
   const GOOGLE_MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_KEY
 
@@ -78,9 +93,9 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
   // Get urgency colors
   const getUrgencyColor = () => {
     switch (triageResult?.urgency) {
-      case 'emergency': return { bg: 'bg-red-500', ring: 'ring-red-500/30' }
+      case 'emergency': return { bg: 'bg-brand-red', ring: 'ring-brand-red/30' }
       case 'urgent': return { bg: 'bg-orange-500', ring: 'ring-orange-500/30' }
-      default: return { bg: 'bg-green-500', ring: 'ring-green-500/30' }
+      default: return { bg: 'bg-brand-green', ring: 'ring-brand-green/30' }
     }
   }
 
@@ -121,7 +136,7 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
         }
 
         const script = document.createElement('script')
-        script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&libraries=places`
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&libraries=places,visualization`
         script.async = true
         script.onload = resolve
         script.onerror = () => reject(new Error('Failed to load Google Maps'))
@@ -427,6 +442,130 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
     stopNavigation()
   }
 
+  // Clear fastest route from map
+  const clearFastestRoute = () => {
+    if (fastestRouteRendererRef.current) {
+      fastestRouteRendererRef.current.setMap(null)
+    }
+    setFastestHospitalId(null)
+    setFastestRouteInfo(null)
+  }
+
+  // Find fastest route among hospitals
+  const handleFindFastestRoute = async () => {
+    if (!mapInstanceRef.current || !userLocation || places.length === 0) return
+
+    // Check cache (valid for 30 seconds)
+    const now = Date.now()
+    const cacheValid = fastestRouteCacheRef.current.timestamp && 
+      (now - fastestRouteCacheRef.current.timestamp) < 30000
+
+    if (cacheValid && fastestRouteCacheRef.current.data) {
+      const cached = fastestRouteCacheRef.current.data
+      setFastestHospitalId(cached.hospitalId)
+      setFastestRouteInfo(cached.routeInfo)
+      drawFastestRoute(cached.directions)
+      return
+    }
+
+    setIsFindingFastest(true)
+    clearFastestRoute()
+
+    // Clear any existing selection/directions
+    if (directionsRendererRef.current) {
+      directionsRendererRef.current.setDirections({ routes: [] })
+    }
+    setSelectedPlace(null)
+    setRouteInfo(null)
+
+    const directionsService = new window.google.maps.DirectionsService()
+    const candidates = sortedPlaces.slice(0, 6) // Top 6 hospitals
+    
+    const routePromises = candidates.map(hospital => {
+      return new Promise((resolve) => {
+        directionsService.route({
+          origin: new window.google.maps.LatLng(userLocation.lat, userLocation.lng),
+          destination: hospital.geometry.location,
+          travelMode: window.google.maps.TravelMode[travelMode],
+        }, (result, status) => {
+          if (status === window.google.maps.DirectionsStatus.OK) {
+            const leg = result.routes[0].legs[0]
+            resolve({
+              hospitalId: hospital.place_id,
+              hospital,
+              directions: result,
+              durationValue: leg.duration.value, // seconds
+              durationText: leg.duration.text,
+              distanceText: leg.distance.text,
+            })
+          } else {
+            resolve(null)
+          }
+        })
+      })
+    })
+
+    try {
+      const results = await Promise.all(routePromises)
+      const validResults = results.filter(r => r !== null)
+
+      if (validResults.length > 0) {
+        // Find hospital with minimum travel time
+        const fastest = validResults.reduce((a, b) => 
+          a.durationValue < b.durationValue ? a : b
+        )
+
+        setFastestHospitalId(fastest.hospitalId)
+        setFastestRouteInfo({
+          eta: fastest.durationText,
+          distance: fastest.distanceText,
+        })
+        drawFastestRoute(fastest.directions)
+
+        // Cache the result
+        fastestRouteCacheRef.current = {
+          data: {
+            hospitalId: fastest.hospitalId,
+            routeInfo: { eta: fastest.durationText, distance: fastest.distanceText },
+            directions: fastest.directions,
+          },
+          timestamp: now,
+        }
+
+        // Pan to show the route
+        mapInstanceRef.current.panTo(fastest.hospital.geometry.location)
+        mapInstanceRef.current.setZoom(13)
+      }
+    } catch (err) {
+      console.error('Error finding fastest route:', err)
+    } finally {
+      setIsFindingFastest(false)
+    }
+  }
+
+  // Draw fastest route in yellow
+  const drawFastestRoute = (directions) => {
+    if (!mapInstanceRef.current) return
+
+    // Clear existing fastest route renderer
+    if (fastestRouteRendererRef.current) {
+      fastestRouteRendererRef.current.setMap(null)
+    }
+
+    // Create new renderer with yellow styling
+    fastestRouteRendererRef.current = new window.google.maps.DirectionsRenderer({
+      map: mapInstanceRef.current,
+      suppressMarkers: false,
+      polylineOptions: {
+        strokeColor: '#facc15', // Tailwind yellow-400
+        strokeWeight: 6,
+        strokeOpacity: 0.9,
+      },
+    })
+
+    fastestRouteRendererRef.current.setDirections(directions)
+  }
+
   // Start live navigation
   const startNavigation = () => {
     if (!selectedPlace || !navigator.geolocation) {
@@ -525,6 +664,106 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
     }
   }, [travelMode])
 
+  // Handle map mode changes (Hospital Finder vs Emergency Heatmap)
+  useEffect(() => {
+    if (!mapInstanceRef.current || !window.google?.maps?.visualization) return
+
+    const handleHeatmapMode = async () => {
+      if (mapMode === 'heatmap') {
+        // Hide hospital markers
+        markersRef.current.forEach(marker => marker.setMap(null))
+        
+        // Hide directions if showing
+        if (directionsRendererRef.current) {
+          directionsRendererRef.current.setMap(null)
+        }
+
+        // Clear fastest route when switching to heatmap
+        clearFastestRoute()
+
+        // Check cache (valid for 60 seconds)
+        const now = Date.now()
+        const cacheValid = heatmapCacheRef.current.timestamp && 
+          (now - heatmapCacheRef.current.timestamp) < 60000
+
+        let points = []
+        
+        if (cacheValid && heatmapCacheRef.current.data) {
+          points = heatmapCacheRef.current.data
+        } else {
+          // Fetch fresh data
+          setHeatmapLoading(true)
+          try {
+            const data = await getHeatmapData(24) // Last 24 hours
+            points = data
+            heatmapCacheRef.current = { data: points, timestamp: now }
+          } catch (err) {
+            console.error('Failed to fetch heatmap data:', err)
+          } finally {
+            setHeatmapLoading(false)
+          }
+        }
+
+        setHeatmapData(points)
+
+        // Create heatmap data points with weights based on urgency
+        const heatmapPoints = points.map(item => ({
+          location: new window.google.maps.LatLng(item.lat, item.lng),
+          weight: item.urgency === 'emergency' ? 3 : item.urgency === 'urgent' ? 2 : 1
+        }))
+
+        // Create or update heatmap layer
+        if (heatmapLayerRef.current) {
+          heatmapLayerRef.current.setData(heatmapPoints)
+          heatmapLayerRef.current.setMap(mapInstanceRef.current)
+        } else {
+          heatmapLayerRef.current = new window.google.maps.visualization.HeatmapLayer({
+            data: heatmapPoints,
+            radius: 40,
+            opacity: 0.75,
+            gradient: [
+              'rgba(0, 255, 0, 0)',
+              'rgba(0, 255, 0, 0.5)',
+              'rgba(127, 255, 0, 0.7)',
+              'rgba(255, 255, 0, 0.8)',
+              'rgba(255, 191, 0, 0.9)',
+              'rgba(255, 127, 0, 0.95)',
+              'rgba(255, 0, 0, 1)'
+            ]
+          })
+          heatmapLayerRef.current.setMap(mapInstanceRef.current)
+        }
+
+        // Zoom out a bit to show wider area
+        if (mapInstanceRef.current && userLocation) {
+          mapInstanceRef.current.setCenter(userLocation)
+          mapInstanceRef.current.setZoom(11)
+        }
+
+      } else {
+        // Hospital Finder mode - show markers, hide heatmap
+        if (heatmapLayerRef.current) {
+          heatmapLayerRef.current.setMap(null)
+        }
+
+        // Show hospital markers again
+        markersRef.current.forEach(marker => marker.setMap(mapInstanceRef.current))
+
+        // Restore directions if we had a selected place
+        if (directionsRendererRef.current && selectedPlace) {
+          directionsRendererRef.current.setMap(mapInstanceRef.current)
+        }
+
+        // Reset zoom
+        if (mapInstanceRef.current && userLocation) {
+          mapInstanceRef.current.setZoom(13)
+        }
+      }
+    }
+
+    handleHeatmapMode()
+  }, [mapMode, userLocation])
+
   const urgencyColors = getUrgencyColor()
 
   if (!triageResult) {
@@ -561,7 +800,7 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
           >
-            <Link to="/interaction" className="rounded-xl bg-sky-500 px-5 sm:px-6 py-2.5 sm:py-3 text-sm font-medium text-white hover:bg-sky-400 inline-block">
+            <Link to="/interaction" className="rounded-xl bg-brand-blue px-5 sm:px-6 py-2.5 sm:py-3 text-sm font-medium text-white hover:bg-brand-blue/90 inline-block">
               Go to Symptom Checker
             </Link>
           </motion.div>
@@ -572,7 +811,7 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
 
   return (
     <motion.div 
-      className={`relative flex flex-col lg:flex-row h-screen ${isDarkMode ? 'bg-neutral-900' : 'bg-gray-100'}`}
+      className={`relative flex flex-col lg:flex-row h-screen ${isDarkMode ? 'bg-brand-dark' : 'bg-brand-light'}`}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.5 }}
@@ -581,7 +820,7 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
       <AnimatePresence>
         {triageResult.urgency === 'emergency' && (
           <motion.div 
-            className="absolute left-0 right-0 top-0 z-50 bg-red-600 px-3 sm:px-4 py-2 sm:py-3 text-center text-white"
+            className="absolute left-0 right-0 top-0 z-50 bg-brand-red px-3 sm:px-4 py-2 sm:py-3 text-center text-white"
             initial={{ y: -60, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: -60, opacity: 0 }}
@@ -598,7 +837,8 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
         )}
       </AnimatePresence>
 
-      {/* Desktop Side Panel - Hidden on mobile */}
+      {/* Desktop Side Panel - Hidden on mobile and in heatmap mode */}
+      {mapMode === 'hospitals' && (
       <motion.div 
         className={`hidden lg:block w-96 overflow-y-auto shadow-lg ${panelBgClass} ${triageResult.urgency === 'emergency' ? 'pt-14' : ''}`}
         initial={{ x: -100, opacity: 0 }}
@@ -645,7 +885,7 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
         <AnimatePresence>
           {error && !loading && (
             <motion.div 
-              className="m-4 rounded-xl bg-red-100 p-4 text-red-600"
+              className="m-4 rounded-xl bg-brand-red/10 p-4 text-brand-red"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
@@ -655,11 +895,72 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
           )}
         </AnimatePresence>
 
+        {/* Find Fastest Route Button */}
+        {!loading && places.length > 0 && (
+          <div className="px-4 pt-4">
+            <motion.button
+              onClick={handleFindFastestRoute}
+              disabled={isFindingFastest}
+              className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm shadow-lg transition-all ${
+                isFindingFastest
+                  ? 'bg-yellow-300 text-yellow-800 cursor-wait'
+                  : 'bg-yellow-400 text-yellow-900 hover:bg-yellow-300 hover:shadow-xl active:scale-[0.98]'
+              }`}
+              whileHover={!isFindingFastest ? { scale: 1.02 } : {}}
+              whileTap={!isFindingFastest ? { scale: 0.98 } : {}}
+            >
+              {isFindingFastest ? (
+                <>
+                  <motion.div
+                    className="w-4 h-4 border-2 border-yellow-800 border-t-transparent rounded-full"
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                  />
+                  Finding fastest route...
+                </>
+              ) : (
+                <>
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+                  </svg>
+                  Find Fastest Route
+                </>
+              )}
+            </motion.button>
+            
+            {/* Fastest Route Result Badge */}
+            <AnimatePresence>
+              {fastestHospitalId && fastestRouteInfo && (
+                <motion.div
+                  className={`mt-3 p-3 rounded-xl ${
+                    isDarkMode ? 'bg-yellow-500/10 ring-1 ring-yellow-500/30' : 'bg-yellow-50 ring-1 ring-yellow-200'
+                  }`}
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-yellow-500 text-lg">⚡</span>
+                    <div>
+                      <p className={`text-sm font-semibold ${isDarkMode ? 'text-yellow-400' : 'text-yellow-700'}`}>
+                        Fastest Route Found
+                      </p>
+                      <p className={`text-xs ${isDarkMode ? 'text-yellow-500/80' : 'text-yellow-600'}`}>
+                        ETA: {fastestRouteInfo.eta} • {fastestRouteInfo.distance}
+                      </p>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
+
         {/* Results */}
         <AnimatePresence>
           {!loading && places.length > 0 && (
             <motion.div 
-              className="p-4 space-y-3"
+              className="p-4 space-y-4"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.2 }}
@@ -667,149 +968,291 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
               {sortedPlaces.map((place, index) => (
                 <motion.div
                   key={place.place_id}
-                  className={`rounded-xl ${cardBgClass} p-4 ring-1 cursor-pointer ${cardHoverClass} transition-all ${
-                    selectedPlace?.place_id === place.place_id ? `ring-2 ${urgencyColors.ring}` : ringNeutral
+                  className={`rounded-2xl overflow-hidden cursor-pointer transition-all duration-300 ${
+                    isDarkMode 
+                      ? 'bg-[#1b2021] shadow-xl shadow-black/20' 
+                      : 'bg-white shadow-lg shadow-brand-dark/5'
+                  } ${
+                    fastestHospitalId === place.place_id
+                      ? 'ring-2 ring-yellow-400 shadow-yellow-400/20'
+                      : selectedPlace?.place_id === place.place_id 
+                        ? `ring-2 ${urgencyColors.ring}` 
+                        : isDarkMode ? 'ring-1 ring-brand-light/5 hover:ring-brand-light/10' : 'ring-1 ring-brand-dark/5 hover:ring-brand-dark/10'
                   }`}
-                  initial={{ opacity: 0, x: -30 }}
-                  animate={{ opacity: 1, x: 0 }}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.4, delay: index * 0.1, ease: [0.22, 1, 0.36, 1] }}
-                  whileHover={{ scale: 1.02, x: 4 }}
+                  whileHover={{ y: -2 }}
                   onClick={() => {
+                    // Clear fastest route when selecting another hospital
+                    if (fastestHospitalId && fastestHospitalId !== place.place_id) {
+                      clearFastestRoute()
+                    }
                     setSelectedPlace(place)
                     mapInstanceRef.current?.panTo(place.geometry.location)
                     mapInstanceRef.current?.setZoom(15)
                   }}
                 >
-                  {/* Open/Closed tag in top right */}
-                  <div className="flex justify-end mb-2">
-                    {place.isOpen === true && (
-                      <motion.span 
-                        className="text-xs font-medium px-2 py-1 rounded-full bg-green-100 text-green-600"
-                        initial={{ scale: 0 }}
-                        animate={{ scale: 1 }}
-                        transition={{ type: "spring", delay: 0.2 }}
-                      >
-                        Open
-                      </motion.span>
-                    )}
-                    {place.isOpen === false && (
-                      <motion.span 
-                        className="text-xs font-medium px-2 py-1 rounded-full bg-red-100 text-red-600"
-                        initial={{ scale: 0 }}
-                        animate={{ scale: 1 }}
-                        transition={{ type: "spring", delay: 0.2 }}
-                      >
-                        Closed
-                      </motion.span>
-                    )}
-                    {place.isOpen === null && (
-                      <span className="text-xs font-medium px-2 py-1 rounded-full bg-gray-100 text-gray-500">
-                        Hours N/A
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <motion.div 
-                      className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold text-white ${urgencyColors.bg}`}
-                      whileHover={{ scale: 1.1 }}
+                  {/* Fastest Route Badge */}
+                  {fastestHospitalId === place.place_id && (
+                    <motion.div
+                      className="bg-yellow-400 px-4 py-2 flex items-center gap-2"
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
                     >
-                      {index + 1}
+                      <svg className="w-4 h-4 text-yellow-900" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+                      </svg>
+                      <span className="text-sm font-bold text-yellow-900">Fastest Route</span>
+                      {fastestRouteInfo && (
+                        <span className="text-sm font-medium text-yellow-800 ml-auto">
+                          ETA: {fastestRouteInfo.eta}
+                        </span>
+                      )}
                     </motion.div>
-                    <div className="flex-1">
-                      <h3 className={`font-semibold ${panelTextClass}`}>{place.name}</h3>
-                      <p className={`text-xs ${panelSubtextClass}`}>{place.vicinity || place.formatted_address}</p>
+                  )}
+                  
+                  {/* Card Header - Hospital Logo/Number + Name + Status */}
+                  <div className="p-4 pb-3">
+                    <div className="flex items-start gap-4">
+                      {/* Hospital Logo/Number Badge */}
+                      <div className="relative flex-shrink-0">
+                        <motion.div 
+                          className={`flex h-14 w-14 items-center justify-center rounded-xl text-xl font-bold text-white ${urgencyColors.bg}`}
+                          whileHover={{ scale: 1.05 }}
+                        >
+                          {place.name.charAt(0).toUpperCase()}
+                        </motion.div>
+                        {/* Rank Badge */}
+                        <div className={`absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
+                          isDarkMode ? 'bg-amber-500 text-black' : 'bg-amber-400 text-amber-900'
+                        }`}>
+                          {index + 1}
+                        </div>
+                      </div>
+                      
+                      {/* Name + Status */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className={`font-semibold text-base leading-tight ${panelTextClass}`}>{place.name}</h3>
+                          {/* Status Badge */}
+                          {place.isOpen === true && (
+                            <motion.span 
+                              className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700"
+                              initial={{ scale: 0 }}
+                              animate={{ scale: 1 }}
+                              transition={{ type: "spring", delay: 0.2 }}
+                            >
+                              Available
+                            </motion.span>
+                          )}
+                          {place.isOpen === false && (
+                            <motion.span 
+                              className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700"
+                              initial={{ scale: 0 }}
+                              animate={{ scale: 1 }}
+                              transition={{ type: "spring", delay: 0.2 }}
+                            >
+                              Closed
+                            </motion.span>
+                          )}
+                          {place.isOpen === null && (
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                              Hours N/A
+                            </span>
+                          )}
+                        </div>
+                        <p className={`text-sm mt-0.5 ${isDarkMode ? 'text-brand-blue' : 'text-brand-blue'}`}>
+                          {triageResult?.department || 'Medical Facility'}
+                        </p>
+                        <p className={`text-xs mt-1 ${panelSubtextClass}`}>
+                          {triageResult?.specialist || 'Healthcare Services'}
+                        </p>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
-                    {place.rating && (
-                      <span className="text-yellow-600">⭐ {place.rating.toFixed(1)}</span>
-                    )}
-                    <span className={panelSubtextClass}>📍 {place.distance.toFixed(1)} km</span>
-                  </div>
-
-                  {/* Dynamic button: Get Directions -> Start Navigation -> Stop Navigation */}
-                  {selectedPlace?.place_id === place.place_id && routeInfo ? (
-                    !isNavigating ? (
-                      <motion.button
-                        onClick={(e) => { e.stopPropagation(); startNavigation() }}
-                        className="mt-3 w-full rounded-lg py-2 text-sm font-medium text-white bg-gradient-to-r from-green-500 to-emerald-500 shadow-lg shadow-green-500/30"
-                        whileHover={{ scale: 1.02, boxShadow: "0 10px 30px -5px rgba(34, 197, 94, 0.4)" }}
-                        whileTap={{ scale: 0.98 }}
-                      >
-                        Start Navigation
-                      </motion.button>
-                    ) : (
-                      <motion.button
-                        onClick={(e) => { e.stopPropagation(); stopNavigation() }}
-                        className="mt-3 w-full rounded-lg py-2 text-sm font-medium text-white bg-gradient-to-r from-red-500 to-rose-500 shadow-lg shadow-red-500/30"
-                        whileHover={{ scale: 1.02, boxShadow: "0 10px 30px -5px rgba(239, 68, 68, 0.4)" }}
-                        whileTap={{ scale: 0.98 }}
-                      >
-                        ⏹ Stop Navigation
-                      </motion.button>
-                    )
-                  ) : (
-                    <motion.button
-                      onClick={(e) => { e.stopPropagation(); showDirections(place) }}
-                      className={`mt-3 w-full rounded-lg py-2 text-sm font-medium text-white ${buttonBgClass}`}
-                      whileHover={{ scale: 1.02, boxShadow: "0 5px 20px -5px rgba(14, 165, 233, 0.4)" }}
-                      whileTap={{ scale: 0.98 }}
-                    >
-                      Get Directions
-                    </motion.button>
-                  )}
-
-                  {/* Book Appointment Section */}
-                  <div className={`mt-3 pt-3 border-t ${borderClass}`}>
-                    <p className={`text-xs font-medium mb-2 ${panelSubtextClass}`}>Book Appointment</p>
-                    {(place.formatted_phone_number || place.website || place.url) ? (
-                      <div className="flex flex-wrap gap-2">
-                        {place.formatted_phone_number && (
-                          <motion.a
-                            href={`tel:${place.formatted_phone_number}`}
-                            onClick={(e) => e.stopPropagation()}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ${isDarkMode ? 'bg-green-900/50 text-green-400 hover:bg-green-900/70' : 'bg-green-100 text-green-700 hover:bg-green-200'} transition-colors`}
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
-                          >
-                            📞 Call Now
-                          </motion.a>
-                        )}
-                        {place.website && (
-                          <motion.a
-                            href={place.website}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ${isDarkMode ? 'bg-blue-900/50 text-blue-400 hover:bg-blue-900/70' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'} transition-colors`}
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
-                          >
-                            🌐 Visit Website
-                          </motion.a>
-                        )}
-                        {place.url && (
-                          <motion.a
-                            href={place.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ${isDarkMode ? 'bg-purple-900/50 text-purple-400 hover:bg-purple-900/70' : 'bg-purple-100 text-purple-700 hover:bg-purple-200'} transition-colors`}
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
-                          >
-                            🧾 Book via Google
-                          </motion.a>
-                        )}
+                  {/* Stats Row */}
+                  <div className={`grid grid-cols-2 gap-px ${isDarkMode ? 'bg-brand-light/5' : 'bg-gray-100'}`}>
+                    <div className={`px-4 py-3 ${isDarkMode ? 'bg-[#1b2021]' : 'bg-white'}`}>
+                      <div className="flex items-center gap-2">
+                        <svg className={`w-4 h-4 ${isDarkMode ? 'text-brand-light/40' : 'text-gray-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                        </svg>
+                        <span className={`text-xs ${panelSubtextClass}`}>Rating</span>
                       </div>
-                    ) : (
-                      <p className={`text-xs italic ${panelSubtextClass}`}>
-                        Please contact the hospital reception for appointment.
+                      <p className={`text-lg font-semibold mt-1 ${panelTextClass}`}>
+                        {place.rating ? `${place.rating.toFixed(1)} ⭐` : 'N/A'}
                       </p>
+                    </div>
+                    <div className={`px-4 py-3 ${isDarkMode ? 'bg-[#1b2021]' : 'bg-white'}`}>
+                      <div className="flex items-center gap-2">
+                        <svg className={`w-4 h-4 ${isDarkMode ? 'text-brand-light/40' : 'text-gray-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                        <span className={`text-xs ${panelSubtextClass}`}>Distance</span>
+                      </div>
+                      <p className={`text-lg font-semibold mt-1 ${panelTextClass}`}>
+                        {place.distance.toFixed(1)} km
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Contact Info Section */}
+                  <div className={`px-4 py-3 space-y-2.5 ${isDarkMode ? 'border-t border-white/5' : 'border-t border-gray-100'}`}>
+                    {/* Address */}
+                    <div className="flex items-start gap-3">
+                      <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${isDarkMode ? 'bg-brand-light/5' : 'bg-gray-100'}`}>
+                        <svg className={`w-4 h-4 ${isDarkMode ? 'text-brand-light/50' : 'text-gray-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                      </div>
+                      <p className={`text-sm leading-relaxed ${panelTextClass}`}>{place.vicinity || place.formatted_address}</p>
+                    </div>
+                    
+                    {/* Phone */}
+                    {place.formatted_phone_number && (
+                      <div className="flex items-center gap-3">
+                        <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${isDarkMode ? 'bg-brand-light/5' : 'bg-gray-100'}`}>
+                          <svg className={`w-4 h-4 ${isDarkMode ? 'text-brand-light/50' : 'text-gray-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                          </svg>
+                        </div>
+                        <p className={`text-sm ${panelTextClass}`}>{place.formatted_phone_number}</p>
+                      </div>
                     )}
                   </div>
+
+                  {/* Action Buttons */}
+                  <div className={`px-4 py-3 flex gap-2 ${isDarkMode ? 'border-t border-brand-light/5' : 'border-t border-brand-dark/5'}`}>
+                    {/* Primary Action - Directions/Navigation */}
+                    {selectedPlace?.place_id === place.place_id && routeInfo ? (
+                      !isNavigating ? (
+                        <motion.button
+                          onClick={(e) => { e.stopPropagation(); startNavigation() }}
+                          className="flex-1 flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium text-white bg-brand-green shadow-lg shadow-brand-green/25"
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                        >
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+                          </svg>
+                          Start Navigation
+                        </motion.button>
+                      ) : (
+                        <motion.button
+                          onClick={(e) => { e.stopPropagation(); stopNavigation() }}
+                          className="flex-1 flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium text-white bg-brand-red shadow-lg shadow-brand-red/25"
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                        >
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clipRule="evenodd" />
+                          </svg>
+                          Stop Navigation
+                        </motion.button>
+                      )
+                    ) : (
+                      <motion.button
+                        onClick={(e) => { e.stopPropagation(); showDirections(place) }}
+                        className="flex-1 flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium text-white bg-brand-blue hover:bg-brand-blue/90"
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                        </svg>
+                        Get Directions
+                      </motion.button>
+                    )}
+
+                    {/* Secondary Action - Call */}
+                    {place.formatted_phone_number ? (
+                      <motion.a
+                        href={`tel:${place.formatted_phone_number}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className={`flex items-center justify-center gap-2 rounded-xl py-2.5 px-4 text-sm font-medium transition-colors ${
+                          isDarkMode 
+                            ? 'bg-brand-green/10 text-brand-green hover:bg-brand-green/20 ring-1 ring-brand-green/30' 
+                            : 'bg-brand-green/10 text-brand-green hover:bg-brand-green/20 ring-1 ring-brand-green/30'
+                        }`}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                        </svg>
+                        Call
+                      </motion.a>
+                    ) : place.url && (
+                      <motion.a
+                        href={place.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className={`flex items-center justify-center gap-2 rounded-xl py-2.5 px-4 text-sm font-medium transition-colors ${
+                          isDarkMode 
+                            ? 'bg-brand-blue/10 text-brand-blue hover:bg-brand-blue/20 ring-1 ring-brand-blue/30' 
+                            : 'bg-brand-blue/10 text-brand-blue hover:bg-brand-blue/20 ring-1 ring-brand-blue/30'
+                        }`}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                        View
+                      </motion.a>
+                    )}
+                  </div>
+
+                  {/* Additional Links - Website/Google */}
+                  {(place.website || place.url) && (
+                    <div className={`px-4 py-3 flex gap-2 ${isDarkMode ? 'bg-brand-light/[0.02]' : 'bg-gray-50'}`}>
+                      {place.website && (
+                        <motion.a
+                          href={place.website}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                            isDarkMode 
+                              ? 'bg-brand-blue/10 text-brand-blue hover:bg-brand-blue/20' 
+                              : 'bg-brand-blue/10 text-brand-blue hover:bg-brand-blue/20'
+                          }`}
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                          </svg>
+                          Visit Website
+                        </motion.a>
+                      )}
+                      {place.url && (
+                        <motion.a
+                          href={place.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                            isDarkMode 
+                              ? 'bg-brand-purple/10 text-brand-purple hover:bg-brand-purple/20' 
+                              : 'bg-brand-purple/10 text-brand-purple hover:bg-brand-purple/20'
+                          }`}
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                          </svg>
+                          View on Google 
+                        </motion.a>
+                      )}
+                    </div>
+                  )}
                 </motion.div>
               ))}
             </motion.div>
@@ -847,8 +1290,8 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
                   }}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-medium transition-all ${
                     travelMode === 'DRIVING'
-                      ? isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white'
-                      : isDarkMode ? 'bg-neutral-800 text-white/70 hover:bg-neutral-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      ? 'bg-brand-blue text-white'
+                      : isDarkMode ? 'bg-brand-light/10 text-brand-light/70 hover:bg-brand-light/15' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                   whileTap={{ scale: 0.95 }}
                 >
@@ -861,8 +1304,8 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
                   }}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-medium transition-all ${
                     travelMode === 'BICYCLING'
-                      ? isDarkMode ? 'bg-green-600 text-white' : 'bg-green-500 text-white'
-                      : isDarkMode ? 'bg-neutral-800 text-white/70 hover:bg-neutral-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      ? 'bg-brand-green text-white'
+                      : isDarkMode ? 'bg-brand-light/10 text-brand-light/70 hover:bg-brand-light/15' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                   whileTap={{ scale: 0.95 }}
                 >
@@ -875,8 +1318,8 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
                   }}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-medium transition-all ${
                     travelMode === 'WALKING'
-                      ? isDarkMode ? 'bg-orange-600 text-white' : 'bg-orange-500 text-white'
-                      : isDarkMode ? 'bg-neutral-800 text-white/70 hover:bg-neutral-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      ? 'bg-orange-500 text-white'
+                      : isDarkMode ? 'bg-brand-light/10 text-brand-light/70 hover:bg-brand-light/15' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                   whileTap={{ scale: 0.95 }}
                 >
@@ -886,21 +1329,21 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
               
               <div className="flex gap-4 mb-4">
                 <motion.div 
-                  className={`rounded-lg px-3 py-2 text-center flex-1 ${isDarkMode ? 'bg-neutral-800' : 'bg-sky-100'}`}
+                  className={`rounded-lg px-3 py-2 text-center flex-1 ${isDarkMode ? 'bg-brand-light/10' : 'bg-brand-blue/10'}`}
                   initial={{ scale: 0.9, opacity: 0 }}
                   animate={{ scale: 1, opacity: 1 }}
                   transition={{ delay: 0.1 }}
                 >
-                  <p className="text-lg font-bold text-sky-600">{routeInfo.distance}</p>
+                  <p className="text-lg font-bold text-brand-blue">{routeInfo.distance}</p>
                   <p className={`text-xs ${panelSubtextClass}`}>Distance</p>
                 </motion.div>
                 <motion.div 
-                  className={`rounded-lg px-3 py-2 text-center flex-1 ${isDarkMode ? 'bg-neutral-800' : 'bg-green-100'}`}
+                  className={`rounded-lg px-3 py-2 text-center flex-1 ${isDarkMode ? 'bg-brand-light/10' : 'bg-brand-green/10'}`}
                   initial={{ scale: 0.9, opacity: 0 }}
                   animate={{ scale: 1, opacity: 1 }}
                   transition={{ delay: 0.2 }}
                 >
-                  <p className="text-lg font-bold text-green-600">{routeInfo.duration}</p>
+                  <p className="text-lg font-bold text-brand-green">{routeInfo.duration}</p>
                   <p className={`text-xs ${panelSubtextClass}`}>Duration</p>
                 </motion.div>
               </div>
@@ -909,8 +1352,8 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
               {!isNavigating ? (
                 <motion.button
                   onClick={startNavigation}
-                  className="w-full mb-4 py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg shadow-green-500/30"
-                  whileHover={{ scale: 1.02, boxShadow: "0 10px 30px -5px rgba(34, 197, 94, 0.4)" }}
+                  className="w-full mb-4 py-3 rounded-xl bg-brand-green text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg shadow-brand-green/30"
+                  whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                 >
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -922,8 +1365,8 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
               ) : (
                 <motion.button
                   onClick={stopNavigation}
-                  className="w-full mb-4 py-3 rounded-xl bg-gradient-to-r from-red-500 to-rose-500 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg shadow-red-500/30"
-                  whileHover={{ scale: 1.02, boxShadow: "0 10px 30px -5px rgba(239, 68, 68, 0.4)" }}
+                  className="w-full mb-4 py-3 rounded-xl bg-brand-red text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg shadow-brand-red/30"
+                  whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   initial={{ scale: 0.9 }}
                   animate={{ scale: 1 }}
@@ -939,18 +1382,18 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
               {/* Live Navigation Indicator */}
               {isNavigating && (
                 <motion.div 
-                  className={`mb-4 p-3 rounded-xl flex items-center gap-3 ${isDarkMode ? 'bg-blue-900/30 border border-blue-500/30' : 'bg-blue-50 border border-blue-200'}`}
+                  className={`mb-4 p-3 rounded-xl flex items-center gap-3 ${isDarkMode ? 'bg-brand-blue/20 border border-brand-blue/30' : 'bg-brand-blue/5 border border-brand-blue/20'}`}
                   initial={{ opacity: 0, y: -10 }}
                   animate={{ opacity: 1, y: 0 }}
                 >
                   <motion.div 
-                    className="w-3 h-3 rounded-full bg-blue-500"
+                    className="w-3 h-3 rounded-full bg-brand-blue"
                     animate={{ scale: [1, 1.2, 1], opacity: [1, 0.7, 1] }}
                     transition={{ duration: 1.5, repeat: Infinity }}
                   />
                   <div>
-                    <p className={`text-sm font-medium ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>Live Navigation Active</p>
-                    <p className={`text-xs ${isDarkMode ? 'text-blue-400/70' : 'text-blue-600'}`}>Following your location • {travelMode === 'DRIVING' ? '🚗 Driving' : travelMode === 'BICYCLING' ? '🚴 Cycling' : '🚶 Walking'}</p>
+                    <p className={`text-sm font-medium text-brand-blue`}>Live Navigation Active</p>
+                    <p className={`text-xs ${isDarkMode ? 'text-brand-blue/70' : 'text-brand-blue/80'}`}>Following your location • {travelMode === 'DRIVING' ? '🚗 Driving' : travelMode === 'BICYCLING' ? '🚴 Cycling' : '🚶 Walking'}</p>
                   </div>
                 </motion.div>
               )}
@@ -964,11 +1407,11 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: 0.1 * idx }}
                   >
-                    <span className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${isDarkMode ? 'bg-neutral-800 text-white/70' : 'bg-gray-100 text-gray-500'}`}>
+                    <span className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${isDarkMode ? 'bg-brand-light/10 text-brand-light/70' : 'bg-gray-100 text-gray-600'}`}>
                       {idx + 1}
                     </span>
                     <div className="flex-1">
-                      <p className={isDarkMode ? 'text-white/80' : 'text-gray-700'} dangerouslySetInnerHTML={{ __html: step.instruction }} />
+                      <p className={isDarkMode ? 'text-brand-light/80' : 'text-gray-700'} dangerouslySetInnerHTML={{ __html: step.instruction }} />
                       <p className={panelSubtextClass}>{step.distance}</p>
                     </div>
                   </motion.div>
@@ -994,7 +1437,7 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
               transition={{ delay: 0.6 }}
             >
               <span className={panelSubtextClass}>Specialist</span>
-              <span className="text-indigo-600">{triageResult.specialist}</span>
+              <span className="text-brand-purple">{triageResult.specialist}</span>
             </motion.div>
             <motion.div 
               className="flex justify-between"
@@ -1003,7 +1446,7 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
               transition={{ delay: 0.7 }}
             >
               <span className={panelSubtextClass}>Department</span>
-              <span className="text-sky-600">{triageResult.department}</span>
+              <span className="text-brand-blue">{triageResult.department}</span>
             </motion.div>
             <motion.div 
               className="flex justify-between"
@@ -1012,11 +1455,12 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
               transition={{ delay: 0.8 }}
             >
               <span className={panelSubtextClass}>Search Radius</span>
-              <span className={isDarkMode ? 'text-white/80' : 'text-gray-700'}>{getSearchRadius() / 1000} km</span>
+              <span className={isDarkMode ? 'text-brand-light/80' : 'text-gray-700'}>{getSearchRadius() / 1000} km</span>
             </motion.div>
           </div>
         </motion.div>
       </motion.div>
+      )}
 
       {/* Map */}
       <motion.div 
@@ -1029,14 +1473,15 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
         <div ref={mapRef} className="h-full w-full" />
         
         {/* Sort By Dropdown - Top Left */}
+        {mapMode === 'hospitals' && (
         <div className="absolute top-4 left-4 z-10">
           <div className="relative">
             <motion.button
               onClick={() => setSortDropdownOpen(!sortDropdownOpen)}
               className={`flex items-center gap-2 px-4 py-2.5 rounded-xl shadow-lg backdrop-blur-md text-sm font-medium transition-colors ${
                 isDarkMode 
-                  ? 'bg-black/80 text-white ring-1 ring-white/10 hover:bg-black/90' 
-                  : 'bg-white/90 text-gray-700 ring-1 ring-black/5 hover:bg-white'
+                  ? 'bg-brand-dark/90 text-brand-light ring-1 ring-brand-light/10 hover:bg-brand-dark' 
+                  : 'bg-white/90 text-gray-900 ring-1 ring-gray-200 hover:bg-white'
               }`}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
@@ -1057,7 +1502,7 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
               {sortDropdownOpen && (
                 <motion.div
                   className={`absolute top-full left-0 mt-2 w-48 rounded-xl shadow-2xl overflow-hidden ${
-                    isDarkMode ? 'bg-neutral-900 ring-1 ring-white/10' : 'bg-white ring-1 ring-black/5'
+                    isDarkMode ? 'bg-brand-dark ring-1 ring-brand-light/10' : 'bg-white ring-1 ring-gray-200'
                   }`}
                   initial={{ opacity: 0, y: -10, scale: 0.95 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -1074,10 +1519,10 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
                       className={`w-full flex items-center gap-3 px-4 py-3 text-sm transition-colors ${
                         sortBy === option.value
                           ? isDarkMode 
-                            ? 'bg-white/10 text-white' 
-                            : 'bg-sky-50 text-sky-600'
+                            ? 'bg-brand-light/10 text-brand-light' 
+                            : 'bg-brand-blue/5 text-brand-blue'
                           : isDarkMode
-                            ? 'text-white/80 hover:bg-white/5'
+                            ? 'text-brand-light/80 hover:bg-brand-light/5'
                             : 'text-gray-700 hover:bg-gray-50'
                       }`}
                     >
@@ -1095,13 +1540,113 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
             </AnimatePresence>
           </div>
         </div>
-        
-        {/* Distance/Time Overlay - Draggable */}
+        )}
+
+        {/* Map Mode Toggle - Top Center */}
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10">
+          <motion.div 
+            className={`flex rounded-xl shadow-lg backdrop-blur-md overflow-hidden ${
+              isDarkMode 
+                ? 'bg-brand-dark/90 ring-1 ring-brand-light/10' 
+                : 'bg-white/90 ring-1 ring-gray-200'
+            }`}
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, delay: 0.2 }}
+          >
+            <button
+              onClick={() => setMapMode('hospitals')}
+              className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-all ${
+                mapMode === 'hospitals'
+                  ? 'bg-brand-blue text-white'
+                  : isDarkMode
+                    ? 'text-brand-light/70 hover:bg-brand-light/5'
+                    : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <span></span>
+              <span className="hidden sm:inline">Hospital Finder</span>
+            </button>
+            <button
+              onClick={() => setMapMode('heatmap')}
+              className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-all ${
+                mapMode === 'heatmap'
+                  ? 'bg-brand-red text-white'
+                  : isDarkMode
+                    ? 'text-brand-light/70 hover:bg-brand-light/5'
+                    : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              
+              <span className="hidden sm:inline">Emergency Heatmap</span>
+            </button>
+          </motion.div>
+        </div>
+
+        {/* Heatmap Legend - Bottom Right (only in heatmap mode) */}
         <AnimatePresence>
-          {routeInfo && selectedPlace && (
+          {mapMode === 'heatmap' && (
+            <motion.div
+              className={`absolute bottom-6 right-4 z-10 p-4 rounded-xl shadow-lg backdrop-blur-md ${
+                isDarkMode 
+                  ? 'bg-brand-dark/90 ring-1 ring-brand-light/10' 
+                  : 'bg-white/90 ring-1 ring-gray-200'
+              }`}
+              initial={{ opacity: 0, x: 20, scale: 0.9 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 20, scale: 0.9 }}
+              transition={{ duration: 0.3 }}
+            >
+              <h4 className={`text-xs font-semibold mb-3 ${isDarkMode ? 'text-brand-light' : 'text-gray-900'}`}>
+                Urgency Density
+              </h4>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 rounded-full bg-brand-red"></div>
+                  <span className={`text-xs ${isDarkMode ? 'text-brand-light/80' : 'text-gray-600'}`}>
+                    High (Emergency)
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 rounded-full bg-brand-orange"></div>
+                  <span className={`text-xs ${isDarkMode ? 'text-brand-light/80' : 'text-gray-600'}`}>
+                    Medium (Urgent)
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 rounded-full bg-brand-green"></div>
+                  <span className={`text-xs ${isDarkMode ? 'text-brand-light/80' : 'text-gray-600'}`}>
+                    Low (Normal)
+                  </span>
+                </div>
+              </div>
+              {heatmapLoading && (
+                <div className={`mt-3 pt-3 border-t ${isDarkMode ? 'border-brand-light/10' : 'border-gray-200'}`}>
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 border-2 border-brand-blue border-t-transparent rounded-full animate-spin"></div>
+                    <span className={`text-xs ${isDarkMode ? 'text-brand-light/60' : 'text-gray-500'}`}>
+                      Loading data...
+                    </span>
+                  </div>
+                </div>
+              )}
+              {!heatmapLoading && heatmapData.length > 0 && (
+                <div className={`mt-3 pt-3 border-t ${isDarkMode ? 'border-brand-light/10' : 'border-gray-200'}`}>
+                  <span className={`text-xs ${isDarkMode ? 'text-brand-light/60' : 'text-gray-500'}`}>
+                    {heatmapData.length} reports in last 24h
+                  </span>
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+        
+        {/* Distance/Time Overlay - Draggable (only in Hospital Finder mode) */}
+        <AnimatePresence>
+          {routeInfo && selectedPlace && mapMode === 'hospitals' && (
             <motion.div
               className={`absolute top-4 right-4 z-10 rounded-2xl shadow-2xl backdrop-blur-md cursor-grab active:cursor-grabbing ${
-                isDarkMode ? 'bg-black/80 ring-1 ring-white/10' : 'bg-white/90 ring-1 ring-black/5'
+                isDarkMode ? 'bg-brand-dark/90 ring-1 ring-brand-light/10' : 'bg-white/90 ring-1 ring-brand-dark/5'
               }`}
               initial={{ opacity: 0, y: -20, scale: 0.9 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -1115,35 +1660,35 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
             >
               {/* Drag handle indicator */}
               <div className={`flex justify-center pt-2 pb-1`}>
-                <div className={`w-8 h-1 rounded-full ${isDarkMode ? 'bg-white/20' : 'bg-gray-300'}`} />
+                <div className={`w-8 h-1 rounded-full ${isDarkMode ? 'bg-brand-light/20' : 'bg-gray-300'}`} />
               </div>
               <div className="px-4 pb-4">
-                <div className={`text-xs font-medium mb-2 truncate max-w-[200px] ${isDarkMode ? 'text-white/60' : 'text-gray-500'}`}>
+                <div className={`text-xs font-medium mb-2 truncate max-w-[200px] ${isDarkMode ? 'text-brand-light/60' : 'text-gray-500'}`}>
                   {selectedPlace.name}
                 </div>
                 <div className="flex items-center gap-4">
                   <div className="flex items-center gap-2">
-                    <div className={`p-2 rounded-xl ${isDarkMode ? 'bg-white/10' : 'bg-sky-100'}`}>
-                      <svg className={`w-5 h-5 ${isDarkMode ? 'text-sky-400' : 'text-sky-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className={`p-2 rounded-xl ${isDarkMode ? 'bg-brand-light/10' : 'bg-brand-blue/10'}`}>
+                      <svg className={`w-5 h-5 text-brand-blue`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
                       </svg>
                     </div>
                     <div>
-                      <p className={`text-lg font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{routeInfo.distance}</p>
-                      <p className={`text-xs ${isDarkMode ? 'text-white/50' : 'text-gray-500'}`}>Distance</p>
+                      <p className={`text-lg font-bold ${isDarkMode ? 'text-brand-light' : 'text-gray-900'}`}>{routeInfo.distance}</p>
+                      <p className={`text-xs ${isDarkMode ? 'text-brand-light/50' : 'text-gray-500'}`}>Distance</p>
                     </div>
                   </div>
-                  <div className={`w-px h-10 ${isDarkMode ? 'bg-white/10' : 'bg-gray-200'}`} />
+                  <div className={`w-px h-10 ${isDarkMode ? 'bg-brand-light/10' : 'bg-gray-200'}`} />
                   <div className="flex items-center gap-2">
-                    <div className={`p-2 rounded-xl ${isDarkMode ? 'bg-white/10' : 'bg-green-100'}`}>
-                      <svg className={`w-5 h-5 ${isDarkMode ? 'text-green-400' : 'text-green-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className={`p-2 rounded-xl ${isDarkMode ? 'bg-brand-light/10' : 'bg-brand-green/10'}`}>
+                      <svg className={`w-5 h-5 text-brand-green`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
                     </div>
                     <div>
-                      <p className={`text-lg font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{routeInfo.duration}</p>
-                      <p className={`text-xs ${isDarkMode ? 'text-white/50' : 'text-gray-500'}`}>Travel time</p>
+                      <p className={`text-lg font-bold ${isDarkMode ? 'text-brand-light' : 'text-gray-900'}`}>{routeInfo.duration}</p>
+                      <p className={`text-xs ${isDarkMode ? 'text-brand-light/50' : 'text-gray-500'}`}>Travel time</p>
                     </div>
                   </div>
                 </div>
@@ -1153,10 +1698,11 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
         </AnimatePresence>
       </motion.div>
 
-      {/* Mobile Bottom Sheet Toggle Button */}
+      {/* Mobile Bottom Sheet Toggle Button - Only in Hospital Finder mode */}
+      {mapMode === 'hospitals' && (
       <motion.button
         className={`lg:hidden fixed left-1/2 -translate-x-1/2 z-40 shadow-lg rounded-full px-6 py-3 flex items-center gap-2 text-sm font-medium ${
-          isDarkMode ? 'bg-neutral-900 text-white' : 'bg-white text-gray-700'
+          isDarkMode ? 'bg-brand-dark text-brand-light' : 'bg-white text-gray-900'
         } ${
           triageResult.urgency === 'emergency' ? 'bottom-4' : 'bottom-4'
         } ${mobileSheetOpen ? 'hidden' : ''}`}
@@ -1171,10 +1717,11 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
         </svg>
         View {sortedPlaces.length} Hospitals
       </motion.button>
+      )}
 
-      {/* Mobile Bottom Sheet */}
+      {/* Mobile Bottom Sheet - Only in Hospital Finder mode */}
       <AnimatePresence>
-        {mobileSheetOpen && (
+        {mobileSheetOpen && mapMode === 'hospitals' && (
           <>
             {/* Backdrop */}
             <motion.div
@@ -1207,7 +1754,7 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
             >
               {/* Drag Handle */}
               <div className="flex justify-center pt-3 pb-2">
-                <div className={`w-10 h-1 rounded-full ${isDarkMode ? 'bg-white/20' : 'bg-gray-300'}`} />
+                <div className={`w-10 h-1 rounded-full ${isDarkMode ? 'bg-brand-light/20' : 'bg-brand-dark/20'}`} />
               </div>
 
               {/* Sheet Header */}
@@ -1235,11 +1782,64 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
 
               {/* Sheet Content */}
               <div className="overflow-y-auto" style={{ maxHeight: mobileSheetExpanded ? 'calc(85vh - 100px)' : 'calc(50vh - 100px)' }}>
+                {/* Find Fastest Route Button - Mobile */}
+                {!loading && sortedPlaces.length > 0 && (
+                  <div className="px-3 pt-3">
+                    <motion.button
+                      onClick={handleFindFastestRoute}
+                      disabled={isFindingFastest}
+                      className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl font-semibold text-sm shadow-md transition-all ${
+                        isFindingFastest
+                          ? 'bg-yellow-300 text-yellow-800 cursor-wait'
+                          : 'bg-yellow-400 text-yellow-900 hover:bg-yellow-300 active:scale-[0.98]'
+                      }`}
+                      whileTap={!isFindingFastest ? { scale: 0.98 } : {}}
+                    >
+                      {isFindingFastest ? (
+                        <>
+                          <motion.div
+                            className="w-4 h-4 border-2 border-yellow-800 border-t-transparent rounded-full"
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                          />
+                          Finding...
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+                          </svg>
+                          Find Fastest Route
+                        </>
+                      )}
+                    </motion.button>
+                    
+                    {/* Fastest Route Result Badge - Mobile */}
+                    <AnimatePresence>
+                      {fastestHospitalId && fastestRouteInfo && (
+                        <motion.div
+                          className={`mt-2 p-2.5 rounded-xl flex items-center gap-2 ${
+                            isDarkMode ? 'bg-yellow-500/10 ring-1 ring-yellow-500/30' : 'bg-yellow-50 ring-1 ring-yellow-200'
+                          }`}
+                          initial={{ opacity: 0, y: -10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                        >
+                          <span className="text-yellow-500">⚡</span>
+                          <span className={`text-xs font-semibold ${isDarkMode ? 'text-yellow-400' : 'text-yellow-700'}`}>
+                            Fastest: {fastestRouteInfo.eta}
+                          </span>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                )}
+
                 {/* Loading */}
                 {loading && (
                   <div className="flex flex-col items-center justify-center p-8">
                     <motion.div 
-                      className="h-8 w-8 rounded-full border-3 border-sky-500 border-t-transparent"
+                      className="h-8 w-8 rounded-full border-3 border-brand-blue border-t-transparent"
                       animate={{ rotate: 360 }}
                       transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
                     />
@@ -1249,118 +1849,181 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
 
                 {/* Error */}
                 {error && !loading && (
-                  <div className="m-4 rounded-xl bg-red-50 p-3 text-sm text-red-600">
+                  <div className="m-4 rounded-xl bg-brand-red/10 p-3 text-sm text-brand-red">
                     {error}
                   </div>
                 )}
 
                 {/* Mobile Results List */}
                 {!loading && sortedPlaces.length > 0 && (
-                  <div className="p-3 space-y-2">
+                  <div className="p-3 space-y-3">
                     {sortedPlaces.map((place, index) => (
                       <motion.div
                         key={place.place_id}
-                        className={`rounded-xl ${cardBgClass} p-3 ring-1 cursor-pointer ${cardHoverClass} ${
-                          selectedPlace?.place_id === place.place_id ? `ring-2 ${urgencyColors.ring}` : ringNeutral
+                        className={`rounded-2xl overflow-hidden cursor-pointer transition-all duration-300 ${
+                          isDarkMode 
+                            ? 'bg-[#1b2021] shadow-lg shadow-black/20' 
+                            : 'bg-white shadow-md shadow-brand-dark/5'
+                        } ${
+                          fastestHospitalId === place.place_id
+                            ? 'ring-2 ring-yellow-400 shadow-yellow-400/20'
+                            : selectedPlace?.place_id === place.place_id 
+                              ? `ring-2 ${urgencyColors.ring}` 
+                              : isDarkMode ? 'ring-1 ring-brand-light/5' : 'ring-1 ring-brand-dark/5'
                         }`}
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: index * 0.05 }}
                         onClick={() => {
+                          // Clear fastest route when selecting another hospital
+                          if (fastestHospitalId && fastestHospitalId !== place.place_id) {
+                            clearFastestRoute()
+                          }
                           setSelectedPlace(place);
                           mapInstanceRef.current?.panTo(place.geometry.location);
                           mapInstanceRef.current?.setZoom(15);
                         }}
                       >
-                        <div className="flex items-start gap-3">
-                          <div className={`flex-shrink-0 flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-white ${urgencyColors.bg}`}>
-                            {index + 1}
+                        {/* Fastest Route Badge - Mobile */}
+                        {fastestHospitalId === place.place_id && (
+                          <div className="bg-yellow-400 px-3 py-1.5 flex items-center gap-2">
+                            <svg className="w-3.5 h-3.5 text-yellow-900" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+                            </svg>
+                            <span className="text-xs font-bold text-yellow-900">Fastest Route</span>
+                            {fastestRouteInfo && (
+                              <span className="text-xs font-medium text-yellow-800 ml-auto">
+                                ETA: {fastestRouteInfo.eta}
+                              </span>
+                            )}
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-start justify-between gap-2">
-                              <h3 className={`font-medium text-sm truncate ${panelTextClass}`}>{place.name}</h3>
-                              {place.isOpen === true && (
-                                <span className="flex-shrink-0 text-xs font-medium px-1.5 py-0.5 rounded-full bg-green-100 text-green-600">Open</span>
-                              )}
-                              {place.isOpen === false && (
-                                <span className="flex-shrink-0 text-xs font-medium px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">Closed</span>
-                              )}}
+                        )}
+                        
+                        {/* Card Header - Hospital Logo/Number + Name + Status */}
+                        <div className="p-3 pb-2">
+                          <div className="flex items-start gap-3">
+                            {/* Hospital Logo/Number Badge */}
+                            <div className="relative flex-shrink-0">
+                              <div className={`flex h-12 w-12 items-center justify-center rounded-xl text-lg font-bold text-white ${urgencyColors.bg}`}>
+                                {place.name.charAt(0).toUpperCase()}
+                              </div>
+                              {/* Rank Badge */}
+                              <div className={`absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${
+                                isDarkMode ? 'bg-amber-500 text-black' : 'bg-amber-400 text-amber-900'
+                              }`}>
+                                {index + 1}
+                              </div>
                             </div>
-                            <p className={`text-xs truncate mt-0.5 ${panelSubtextClass}`}>{place.vicinity || place.formatted_address}</p>
-                            <div className="flex items-center gap-3 mt-2 text-xs">
-                              {place.rating && <span className="text-yellow-600">⭐ {place.rating.toFixed(1)}</span>}
-                              <span className={panelSubtextClass}>📍 {place.distance.toFixed(1)} km</span>
+                            
+                            {/* Name + Status */}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-start justify-between gap-2">
+                                <h3 className={`font-semibold text-sm leading-tight truncate ${panelTextClass}`}>{place.name}</h3>
+                                {/* Status Badge */}
+                                {place.isOpen === true && (
+                                  <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700">
+                                    Open
+                                  </span>
+                                )}
+                                {place.isOpen === false && (
+                                  <span className="flex-shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">
+                                    Closed
+                                  </span>
+                                )}
+                              </div>
+                              <p className={`text-xs mt-0.5 text-brand-blue`}>
+                                {triageResult?.department || 'Medical Facility'}
+                              </p>
+                              <p className={`text-[11px] mt-0.5 truncate ${panelSubtextClass}`}>{place.vicinity || place.formatted_address}</p>
                             </div>
                           </div>
                         </div>
 
-                        {/* Dynamic button: Get Directions -> Start Navigation -> Stop Navigation */}
-                        {selectedPlace?.place_id === place.place_id && routeInfo ? (
-                          !isNavigating ? (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); startNavigation(); setMobileSheetOpen(false); }}
-                              className="mt-3 w-full rounded-lg py-2 text-xs font-medium text-white bg-gradient-to-r from-green-500 to-emerald-500 shadow-lg"
-                            >
-                              🚀 Start Navigation
-                            </button>
-                          ) : (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); stopNavigation(); }}
-                              className="mt-3 w-full rounded-lg py-2 text-xs font-medium text-white bg-gradient-to-r from-red-500 to-rose-500 shadow-lg"
-                            >
-                              ⏹ Stop Navigation
-                            </button>
-                          )
-                        ) : (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); showDirections(place); setMobileSheetOpen(false); }}
-                            className={`mt-3 w-full rounded-lg py-2 text-xs font-medium text-white ${buttonBgClass}`}
-                          >
-                            Get Directions
-                          </button>
-                        )}
-
-                        {/* Book Appointment Section - Mobile */}
-                        <div className={`mt-3 pt-3 border-t ${borderClass}`}>
-                          <p className={`text-xs font-medium mb-2 ${panelSubtextClass}`}>Book Appointment</p>
-                          {(place.formatted_phone_number || place.website || place.url) ? (
-                            <div className="flex flex-wrap gap-2">
-                              {place.formatted_phone_number && (
-                                <a
-                                  href={`tel:${place.formatted_phone_number}`}
-                                  onClick={(e) => e.stopPropagation()}
-                                  className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium ${isDarkMode ? 'bg-green-900/50 text-green-400' : 'bg-green-100 text-green-700'}`}
-                                >
-                                  📞 Call
-                                </a>
-                              )}
-                              {place.website && (
-                                <a
-                                  href={place.website}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  onClick={(e) => e.stopPropagation()}
-                                  className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium ${isDarkMode ? 'bg-blue-900/50 text-blue-400' : 'bg-blue-100 text-blue-700'}`}
-                                >
-                                  🌐 Website
-                                </a>
-                              )}
-                              {place.url && (
-                                <a
-                                  href={place.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  onClick={(e) => e.stopPropagation()}
-                                  className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium ${isDarkMode ? 'bg-purple-900/50 text-purple-400' : 'bg-purple-100 text-purple-700'}`}
-                                >
-                                  🧾 Google
-                                </a>
-                              )}
-                            </div>
-                          ) : (
-                            <p className={`text-xs italic ${panelSubtextClass}`}>
-                              Please contact the hospital reception for appointment.
+                        {/* Stats Row */}
+                        <div className={`flex items-center justify-around py-2 ${isDarkMode ? 'bg-brand-light/[0.02]' : 'bg-gray-50'}`}>
+                          <div className="text-center">
+                            <p className={`text-sm font-semibold ${panelTextClass}`}>
+                              {place.rating ? `${place.rating.toFixed(1)} ⭐` : 'N/A'}
                             </p>
+                            <p className={`text-[10px] ${panelSubtextClass}`}>Rating</p>
+                          </div>
+                          <div className={`w-px h-6 ${isDarkMode ? 'bg-brand-light/10' : 'bg-gray-200'}`} />
+                          <div className="text-center">
+                            <p className={`text-sm font-semibold ${panelTextClass}`}>{place.distance.toFixed(1)} km</p>
+                            <p className={`text-[10px] ${panelSubtextClass}`}>Distance</p>
+                          </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className={`px-3 py-2.5 flex gap-2 ${isDarkMode ? 'border-t border-brand-light/5' : 'border-t border-gray-100'}`}>
+                          {/* Primary Action - Directions/Navigation */}
+                          {selectedPlace?.place_id === place.place_id && routeInfo ? (
+                            !isNavigating ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); startNavigation(); setMobileSheetOpen(false); }}
+                                className="flex-1 flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-medium text-white bg-brand-green shadow-md"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+                                </svg>
+                                Navigate
+                              </button>
+                            ) : (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); stopNavigation(); }}
+                                className="flex-1 flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-medium text-white bg-brand-red shadow-md"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clipRule="evenodd" />
+                                </svg>
+                                Stop
+                              </button>
+                            )
+                          ) : (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); showDirections(place); setMobileSheetOpen(false); }}
+                              className="flex-1 flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-medium text-white bg-brand-blue hover:bg-brand-blue/90"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                              </svg>
+                              Directions
+                            </button>
+                          )}
+
+                          {/* Secondary Action - Call */}
+                          {place.formatted_phone_number ? (
+                            <a
+                              href={`tel:${place.formatted_phone_number}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className={`flex items-center justify-center gap-1.5 rounded-xl py-2 px-3 text-xs font-medium transition-colors ${
+                                isDarkMode 
+                                  ? 'bg-brand-green/10 text-brand-green ring-1 ring-brand-green/30' 
+                                  : 'bg-brand-green/10 text-brand-green ring-1 ring-brand-green/30'
+                              }`}
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                              </svg>
+                              Call
+                            </a>
+                          ) : place.url && (
+                            <a
+                              href={place.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className={`flex items-center justify-center gap-1.5 rounded-xl py-2 px-3 text-xs font-medium transition-colors ${
+                                isDarkMode 
+                                  ? 'bg-brand-blue/10 text-brand-blue ring-1 ring-brand-blue/30' 
+                                  : 'bg-brand-blue/10 text-brand-blue ring-1 ring-brand-blue/30'
+                              }`}
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                              </svg>
+                              View
+                            </a>
                           )}
                         </div>
                       </motion.div>
@@ -1385,8 +2048,8 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
                         }}
                         className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-medium transition-all ${
                           travelMode === 'DRIVING'
-                            ? isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white'
-                            : isDarkMode ? 'bg-neutral-800 text-white/70' : 'bg-gray-100 text-gray-600'
+                            ? 'bg-brand-blue text-white'
+                            : isDarkMode ? 'bg-brand-light/10 text-brand-light/70' : 'bg-gray-100 text-gray-600'
                         }`}
                       >
                         🚗 Car
@@ -1398,8 +2061,8 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
                         }}
                         className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-medium transition-all ${
                           travelMode === 'BICYCLING'
-                            ? isDarkMode ? 'bg-green-600 text-white' : 'bg-green-500 text-white'
-                            : isDarkMode ? 'bg-neutral-800 text-white/70' : 'bg-gray-100 text-gray-600'
+                            ? 'bg-brand-green text-white'
+                            : isDarkMode ? 'bg-brand-light/10 text-brand-light/70' : 'bg-gray-100 text-gray-600'
                         }`}
                       >
                         🚴 Bike
@@ -1411,8 +2074,8 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
                         }}
                         className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-medium transition-all ${
                           travelMode === 'WALKING'
-                            ? isDarkMode ? 'bg-orange-600 text-white' : 'bg-orange-500 text-white'
-                            : isDarkMode ? 'bg-neutral-800 text-white/70' : 'bg-gray-100 text-gray-600'
+                            ? 'bg-orange-500 text-white'
+                            : isDarkMode ? 'bg-brand-light/10 text-brand-light/70' : 'bg-gray-100 text-gray-600'
                         }`}
                       >
                         🚶 Walk
@@ -1420,12 +2083,12 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
                     </div>
 
                     <div className="flex gap-3 mb-3">
-                      <div className={`flex-1 rounded-lg px-3 py-2 text-center ${isDarkMode ? 'bg-neutral-800' : 'bg-sky-50'}`}>
-                        <p className="text-base font-bold text-sky-600">{routeInfo.distance}</p>
+                      <div className={`flex-1 rounded-lg px-3 py-2 text-center ${isDarkMode ? 'bg-brand-light/10' : 'bg-brand-blue/10'}`}>
+                        <p className="text-base font-bold text-brand-blue">{routeInfo.distance}</p>
                         <p className={`text-xs ${panelSubtextClass}`}>Distance</p>
                       </div>
-                      <div className={`flex-1 rounded-lg px-3 py-2 text-center ${isDarkMode ? 'bg-neutral-800' : 'bg-green-50'}`}>
-                        <p className="text-base font-bold text-green-600">{routeInfo.duration}</p>
+                      <div className={`flex-1 rounded-lg px-3 py-2 text-center ${isDarkMode ? 'bg-brand-light/10' : 'bg-brand-green/10'}`}>
+                        <p className="text-base font-bold text-brand-green">{routeInfo.duration}</p>
                         <p className={`text-xs ${panelSubtextClass}`}>Duration</p>
                       </div>
                     </div>
@@ -1434,7 +2097,7 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
                     {!isNavigating ? (
                       <button
                         onClick={() => { startNavigation(); setMobileSheetOpen(false); }}
-                        className="w-full py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg"
+                        className="w-full py-3 rounded-xl bg-brand-green text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg shadow-brand-green/30"
                       >
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
@@ -1445,7 +2108,7 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
                     ) : (
                       <button
                         onClick={stopNavigation}
-                        className="w-full py-3 rounded-xl bg-gradient-to-r from-red-500 to-rose-500 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg"
+                        className="w-full py-3 rounded-xl bg-brand-red text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg shadow-brand-red/30"
                       >
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -1457,9 +2120,9 @@ export default function TriageMapRouter({ triageResult, isDarkMode = false }) {
 
                     {/* Mobile Live Navigation Indicator */}
                     {isNavigating && (
-                      <div className={`mt-3 p-2 rounded-xl flex items-center gap-2 ${isDarkMode ? 'bg-blue-900/30 border border-blue-500/30' : 'bg-blue-50 border border-blue-200'}`}>
-                        <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                        <p className={`text-xs font-medium ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>
+                      <div className={`mt-3 p-2 rounded-xl flex items-center gap-2 ${isDarkMode ? 'bg-brand-blue/20 border border-brand-blue/30' : 'bg-brand-blue/5 border border-brand-blue/20'}`}>
+                        <div className="w-2 h-2 rounded-full bg-brand-blue animate-pulse" />
+                        <p className={`text-xs font-medium text-brand-blue`}>
                           Live • {travelMode === 'DRIVING' ? '🚗' : travelMode === 'BICYCLING' ? '🚴' : '🚶'}
                         </p>
                       </div>

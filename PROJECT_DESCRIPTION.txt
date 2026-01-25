@@ -1,0 +1,288 @@
+================================================================================
+                    LACKECITY - MEDICAL TRIAGE & HOSPITAL FINDER
+                              PROJECT DOCUMENTATION
+================================================================================
+
+PROJECT NAME: Lackecity
+TYPE: Healthcare Web Application (Hackathon Project)
+VERSION: 0.0.0
+
+================================================================================
+                                 OVERVIEW
+================================================================================
+
+Lackecity is an AI-powered medical triage and hospital finder application. It 
+helps users describe their symptoms, receive intelligent triage routing, and 
+find the nearest appropriate healthcare facility with real-time navigation.
+
+The application does NOT diagnose conditions or prescribe treatments - it 
+purely routes users to the appropriate type of specialist and healthcare 
+facility based on their symptoms.
+
+================================================================================
+                              CORE FEATURES
+================================================================================
+
+1. AI-POWERED SYMPTOM ANALYSIS
+   - Users describe their symptoms in natural language
+   - OpenRouter AI API analyzes symptoms and determines:
+     * Appropriate specialist type (Cardiologist, Neurologist, etc.)
+     * Hospital department (Cardiology, Emergency, Pediatrics, etc.)
+     * Urgency level (normal, urgent, emergency)
+     * Facility type needed (clinic, hospital, emergency_room)
+     * Search keywords optimized for Google Maps
+
+2. INTELLIGENT HOSPITAL/CLINIC FINDER
+   - Uses Google Maps Places API to find nearby medical facilities
+   - Searches based on AI-determined specialist/department keywords
+   - Calculates distance from user's current location
+   - Shows ratings, open/closed status, and contact information
+   - Sorts facilities by distance or rating
+
+3. REAL-TIME NAVIGATION
+   - Turn-by-turn directions to selected facility
+   - Multiple travel modes: Driving, Bicycling, Walking
+   - Live location tracking during navigation
+   - Distance and estimated travel time display
+   - Draggable route info overlay
+
+4. USER AUTHENTICATION & HISTORY
+   - Google Sign-In via Firebase Authentication
+   - Search history saved to Firebase Firestore
+   - Users can view and reload previous symptom searches
+   - Persistent user sessions
+
+5. DARK/LIGHT MODE THEMING
+   - Full dark and light mode support
+   - Theme preference saved to localStorage
+   - Consistent theming across all pages
+
+6. RESPONSIVE DESIGN
+   - Desktop: Side panel with hospital cards + map view
+   - Mobile: Bottom sheet interface with swipe gestures
+   - Smooth animations using Framer Motion
+
+================================================================================
+                            TECHNOLOGY STACK
+================================================================================
+
+FRONTEND FRAMEWORK:
+- React 19.2.0 (Latest version)
+- React Router DOM 7.12.0 (Routing)
+- Vite 7.2.4 (Build tool & dev server)
+
+STYLING:
+- Tailwind CSS 4.1.18 (Utility-first CSS)
+- Custom brand colors defined via @theme directive
+- Responsive design with mobile-first approach
+
+ANIMATIONS:
+- Framer Motion 12.29.0 (Page transitions, micro-interactions)
+- GSAP 3.14.2 (Advanced animations)
+- Locomotive Scroll 5.0.1 (Smooth scrolling)
+
+BACKEND SERVICES:
+- Firebase 12.8.0
+  * Authentication (Google Sign-In)
+  * Firestore (Search history storage)
+
+EXTERNAL APIs:
+- OpenRouter API (AI-powered symptom analysis)
+- Google Maps JavaScript API (Map display)
+- Google Places API (Hospital/clinic search)
+- Google Directions API (Route calculation)
+
+DEV TOOLS:
+- ESLint 9.39.1 (Code linting)
+- PostCSS 8.5.6 (CSS processing)
+- Autoprefixer 10.4.23
+
+================================================================================
+                           PROJECT STRUCTURE
+================================================================================
+
+lackecity-hackathon/
+├── index.html                 # Entry HTML file
+├── package.json               # Dependencies & scripts
+├── vite.config.js             # Vite configuration
+├── tailwind.config.js         # Tailwind configuration
+├── postcss.config.js          # PostCSS configuration
+├── eslint.config.js           # ESLint configuration
+├── README.md                  # Setup instructions
+├── public/                    # Static assets
+│   └── image.png              # Background image
+└── src/
+    ├── main.jsx               # React entry point
+    ├── App.jsx                # Main app with routing
+    ├── App.css                # Global app styles
+    ├── index.css              # Tailwind imports & theme colors
+    ├── assets/                # Static assets
+    ├── components/
+    │   ├── HomePage.jsx       # Landing page with hero section
+    │   ├── interaction.jsx    # Symptom input & AI triage
+    │   ├── maps.jsx           # Map page wrapper
+    │   ├── TriageMapRouter.jsx# Hospital finder with navigation
+    │   ├── PageTransition.jsx # Page transition animations
+    │   ├── AnimatedLink.jsx   # Animated link component
+    │   ├── SmoothScroll.jsx   # Locomotive scroll wrapper
+    │   └── ErrorBoundary.jsx  # Error handling component
+    ├── context/
+    │   └── AuthContext.jsx    # Firebase auth context provider
+    ├── firebase/
+    │   └── config.js          # Firebase initialization
+    ├── services/
+    │   └── searchHistory.js   # Firestore search history CRUD
+    └── utils/
+        └── openai.js          # OpenRouter API integration
+
+================================================================================
+                              USER FLOW
+================================================================================
+
+1. LANDING PAGE (/)
+   - User sees hero section with app description
+   - Can sign in with Google account
+   - Clicks "Get Started" or "Start Triage"
+
+2. SYMPTOM INPUT (/interaction)
+   - User types symptoms in text area
+   - Example: "I have chest pain and difficulty breathing"
+   - Clicks "Analyze Symptoms"
+
+3. AI TRIAGE RESULT
+   - AI returns routing information:
+     * Specialist: "Cardiologist"
+     * Department: "Cardiology"
+     * Urgency: "urgent"
+     * Search keywords: ["cardiology hospital", "heart specialist"]
+   - User sees triage summary card
+   - Clicks "Find Nearby Facilities"
+
+4. HOSPITAL FINDER (/maps)
+   - Map shows user location and nearby facilities
+   - Facility cards show:
+     * Name, rating, distance
+     * Open/Closed status
+     * Address and phone number
+     * Action buttons (Directions, Call, Website)
+
+5. NAVIGATION
+   - User selects a facility
+   - Gets route with travel time and distance
+   - Can start live navigation
+   - Multiple travel modes available
+
+================================================================================
+                          CUSTOM BRAND COLORS
+================================================================================
+
+Colors are defined in src/index.css using Tailwind v4 @theme directive:
+
+  --color-brand-green:  #bfd200  (Lime green - success, available)
+  --color-brand-blue:   #0466c8  (Royal blue - primary actions)
+  --color-brand-red:    #ba181b  (Crimson - errors, closed, emergency)
+  --color-brand-purple: #9d4edd  (Violet - accent, links)
+  --color-brand-light:  #e9ecef  (Light gray - light mode backgrounds)
+  --color-brand-dark:   #1b2021  (Near black - dark mode backgrounds)
+
+================================================================================
+                        ENVIRONMENT VARIABLES
+================================================================================
+
+Required in .env file:
+
+  VITE_OPENROUTER_API_KEY      # OpenRouter API key for AI triage
+  VITE_GOOGLE_MAPS_KEY         # Google Maps API key
+  VITE_FIREBASE_API_KEY        # Firebase API key
+  VITE_FIREBASE_AUTH_DOMAIN    # Firebase auth domain
+  VITE_FIREBASE_PROJECT_ID     # Firebase project ID
+  VITE_FIREBASE_STORAGE_BUCKET # Firebase storage bucket
+  VITE_FIREBASE_MESSAGING_SENDER_ID
+  VITE_FIREBASE_APP_ID
+
+================================================================================
+                            SETUP & RUNNING
+================================================================================
+
+1. Install dependencies:
+   npm install
+
+2. Create .env file with required API keys (see above)
+
+3. Start development server:
+   npm run dev
+
+4. Open browser at http://localhost:5173
+
+5. Build for production:
+   npm run build
+
+================================================================================
+                           KEY COMPONENTS
+================================================================================
+
+1. TriageMapRouter.jsx (~1636 lines)
+   - Largest component handling hospital finder functionality
+   - Google Maps integration with custom markers
+   - Directions and live navigation
+   - Responsive desktop sidebar and mobile bottom sheet
+   - Sort by distance/rating
+   - Travel mode selection (Car, Bike, Walk)
+
+2. interaction.jsx (~608 lines)
+   - Symptom input form with animations
+   - AI triage API call
+   - Result display with urgency levels
+   - Search history sidebar (for logged-in users)
+
+3. HomePage.jsx (~532 lines)
+   - Landing page with animated background
+   - Feature highlights
+   - User authentication UI
+   - Responsive navigation
+
+4. AuthContext.jsx
+   - Firebase authentication provider
+   - Google Sign-In integration
+   - User state management
+
+================================================================================
+                        IMPORTANT NOTES
+================================================================================
+
+1. MEDICAL DISCLAIMER
+   This application is for ROUTING purposes only. It does NOT:
+   - Diagnose medical conditions
+   - Prescribe treatments or medications
+   - Provide medical advice
+   Users should always consult qualified healthcare professionals.
+
+2. API COSTS
+   - Google Maps APIs have usage limits and costs
+   - OpenRouter API has per-token pricing
+   - Monitor usage in respective dashboards
+
+3. TAILWIND v4
+   Custom colors MUST be defined in index.css using @theme directive,
+   NOT in tailwind.config.js (which is ignored for colors in v4).
+
+4. BROWSER PERMISSIONS
+   - Geolocation required for user position
+   - Users must allow location access for full functionality
+
+================================================================================
+                              CREDITS
+================================================================================
+
+Built for Lackecity Hackathon
+Date: January 2026
+
+Technologies provided by:
+- React (Meta)
+- Tailwind CSS (Tailwind Labs)
+- Firebase (Google)
+- Google Maps Platform
+- OpenRouter AI
+- Framer Motion
+
+================================================================================

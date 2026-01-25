@@ -36,6 +36,7 @@ export default function Interaction({ isDarkMode = false }) {
   const [searchHistory, setSearchHistory] = useState([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
+  const [userLocation, setUserLocation] = useState(null)
 
   const baseBgClass = isDarkMode ? 'bg-black' : 'bg-slate-950'
   const overlayBgClass = isDarkMode ? 'bg-black/80' : 'bg-slate-950/70'
@@ -43,6 +44,25 @@ export default function Interaction({ isDarkMode = false }) {
   const orbSecondary = isDarkMode ? 'bg-neutral-800/40' : 'bg-indigo-500/20'
   const inputFocusRing = isDarkMode ? 'focus-within:ring-white/30' : 'focus-within:ring-sky-500/50'
   const submitBg = isDarkMode ? 'bg-black ring-1 ring-white/10 hover:bg-neutral-900' : 'bg-sky-500 hover:bg-sky-400'
+
+  // Get user location on mount for heatmap data
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setUserLocation({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          })
+        },
+        (error) => {
+          console.log('Location access denied or unavailable:', error.message)
+          // Location is optional for heatmap, so we don't show an error
+        },
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }
+      )
+    }
+  }, [])
 
   // Fetch search history when user is logged in
   useEffect(() => {
@@ -80,7 +100,8 @@ export default function Interaction({ isDarkMode = false }) {
       // Save search to history if user is logged in
       if (currentUser) {
         try {
-          await saveSearch(currentUser.uid, input, triageResult)
+          // Pass user location for heatmap data (anonymized)
+          await saveSearch(currentUser.uid, input, triageResult, userLocation)
           // Refresh search history
           const history = await getSearchHistory(currentUser.uid)
           setSearchHistory(history)

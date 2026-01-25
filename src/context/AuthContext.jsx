@@ -11,7 +11,7 @@ import {
 import { auth, googleProvider } from '../firebase/config';
 
 const AuthContext = createContext();
-
+// PROJECT_DESCRIPTION.txt
 export function useAuth() {
   return useContext(AuthContext);
 }

@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* Custom Brand Colors for Tailwind v4 */
+@theme {
+  --color-brand-green: #007f5f;
+  --color-brand-blue: #42a5f5;
+  --color-brand-red: #ae2012;
+  --color-brand-orange: #f77f00;
+  --color-brand-purple: #c77dff;
+  --color-brand-light: #e9ecef;
+  --color-brand-dark: #1b2021;
+}
+
 /* Locomotive Scroll */
 html.has-scroll-smooth {
   overflow: hidden;

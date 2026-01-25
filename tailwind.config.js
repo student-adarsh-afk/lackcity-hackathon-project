@@ -13,6 +13,17 @@ export default {
         heading: ['Manrope', 'sans-serif'],
         body: ['Inter', 'sans-serif'],
       },
+      colors: {
+        // Custom brand colors
+        brand: {
+          green: '#bfd200',
+          blue: '#0466c8',
+          red: '#ba181b',
+          purple: '#9d4edd',
+          light: '#e9ecef',
+          dark: '#1b2021',
+        }
+      }
     },
   },
   plugins: [],
