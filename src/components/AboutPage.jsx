@@ -153,7 +153,8 @@ export default function AboutPage({ isDarkMode = false, onToggleDarkMode }) {
   const teamMembers = [
     { name: 'Adarsh Raj', role: 'Lead Developer' },
     { name: 'Kshitij Jain', role: 'UI/UX Designer' },
-    { name: 'Mithil Paneri', role: 'Tester and debugger' },
+    { name: 'Mithil Paneri', role: 'Tester and debugger ' },
+    { name: 'Chirayu Jain', role: 'Legal Advisor' },
   ]
 
   return (
