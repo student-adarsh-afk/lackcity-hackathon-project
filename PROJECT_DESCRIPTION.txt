@@ -1,9 +1,9 @@
 ================================================================================
-                    LACKECITY - MEDICAL TRIAGE & HOSPITAL FINDER
+                    SEHAT AI - MEDICAL TRIAGE & HOSPITAL FINDER
                               PROJECT DOCUMENTATION
 ================================================================================
 
-PROJECT NAME: Lackecity
+PROJECT NAME: Sehat AI
 TYPE: Healthcare Web Application (Hackathon Project)
 VERSION: 0.0.0
 
@@ -11,7 +11,7 @@ VERSION: 0.0.0
                                  OVERVIEW
 ================================================================================
 
-Lackecity is an AI-powered medical triage and hospital finder application. It 
+Sehat AI is an AI-powered medical triage and hospital finder application. It 
 helps users describe their symptoms, receive intelligent triage routing, and 
 find the nearest appropriate healthcare facility with real-time navigation.
 
@@ -101,7 +101,7 @@ DEV TOOLS:
                            PROJECT STRUCTURE
 ================================================================================
 
-lackecity-hackathon/
+sehat-ai/
 ├── index.html                 # Entry HTML file
 ├── package.json               # Dependencies & scripts
 ├── vite.config.js             # Vite configuration
@@ -274,7 +274,7 @@ Required in .env file:
                               CREDITS
 ================================================================================
 
-Built for Lackecity Hackathon
+Built for Sehat AI Healthcare Project
 Date: January 2026
 
 Technologies provided by:

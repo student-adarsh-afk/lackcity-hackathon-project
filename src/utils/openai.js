@@ -58,7 +58,7 @@ Rules:
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
         'HTTP-Referer': window.location.origin,
-        'X-Title': 'Lackecity Medical Triage',
+        'X-Title': 'Sehat AI Medical Triage',
       },
       body: JSON.stringify({
         model: 'openai/gpt-4o-mini',

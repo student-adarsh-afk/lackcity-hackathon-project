@@ -1,4 +1,4 @@
-# Lackecity - Medical Triage & Hospital Finder
+# Sehat AI - Medical Triage & Hospital Finder
 
 AI-powered symptom checker that routes you to the nearest appropriate hospital or clinic.
 

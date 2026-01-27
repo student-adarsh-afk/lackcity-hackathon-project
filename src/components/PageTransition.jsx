@@ -4,25 +4,25 @@ import { useLocation } from 'react-router-dom'
 const pageVariants = {
   initial: {
     opacity: 0,
-    scale: 0.97,
-    filter: 'blur(8px)',
+    scale: 0.96,
+    filter: 'blur(12px)',
   },
   animate: {
     opacity: 1,
     scale: 1,
     filter: 'blur(0px)',
     transition: {
-      duration: 0.7,
-      ease: [0.22, 1, 0.36, 1], // Custom cubic-bezier for premium feel
+      duration: 1.2,
+      ease: [0.16, 1, 0.3, 1], // Premium slow ease-out
     },
   },
   exit: {
     opacity: 0,
-    scale: 1.02,
-    filter: 'blur(8px)',
+    scale: 1.03,
+    filter: 'blur(12px)',
     transition: {
-      duration: 0.5,
-      ease: [0.22, 1, 0.36, 1],
+      duration: 0.8,
+      ease: [0.16, 1, 0.3, 1],
     },
   },
 }
@@ -36,16 +36,16 @@ const slideUpVariants = {
     opacity: 1,
     y: 0,
     transition: {
-      duration: 0.8,
-      ease: [0.22, 1, 0.36, 1],
+      duration: 1.0,
+      ease: [0.16, 1, 0.3, 1],
     },
   },
   exit: {
     opacity: 0,
     y: -30,
     transition: {
-      duration: 0.5,
-      ease: [0.22, 1, 0.36, 1],
+      duration: 0.7,
+      ease: [0.16, 1, 0.3, 1],
     },
   },
 }
@@ -57,16 +57,16 @@ const overlayVariants = {
   animate: {
     scaleY: 0,
     transition: {
-      duration: 0.8,
-      ease: [0.22, 1, 0.36, 1],
-      delay: 0.1,
+      duration: 1.2,
+      ease: [0.16, 1, 0.3, 1],
+      delay: 0.15,
     },
   },
   exit: {
     scaleY: 1,
     transition: {
-      duration: 0.5,
-      ease: [0.22, 1, 0.36, 1],
+      duration: 0.7,
+      ease: [0.16, 1, 0.3, 1],
     },
   },
 }
@@ -83,33 +83,56 @@ export default function PageTransition({ children }) {
         exit="exit"
         className="relative"
       >
-        {/* Overlay transition effect */}
+        {/* Primary overlay - Deep black */}
         <motion.div
           variants={overlayVariants}
-          className="fixed inset-0 z-[100] bg-slate-950 origin-top pointer-events-none"
+          className="fixed inset-0 z-[100] bg-[#0a0a0a] origin-top pointer-events-none"
         />
         
-        {/* Second overlay for layered effect */}
+        {/* Second overlay - Charcoal gray for layered effect */}
         <motion.div
           variants={{
             initial: { scaleY: 1 },
             animate: {
               scaleY: 0,
               transition: {
-                duration: 0.7,
-                ease: [0.22, 1, 0.36, 1],
-                delay: 0.2,
+                duration: 1.1,
+                ease: [0.16, 1, 0.3, 1],
+                delay: 0.25,
               },
             },
             exit: {
               scaleY: 1,
               transition: {
-                duration: 0.4,
-                ease: [0.22, 1, 0.36, 1],
+                duration: 0.6,
+                ease: [0.16, 1, 0.3, 1],
               },
             },
           }}
-          className="fixed inset-0 z-[99] bg-indigo-500 origin-top pointer-events-none"
+          className="fixed inset-0 z-[99] bg-[#1a1a1a] origin-top pointer-events-none"
+        />
+
+        {/* Third overlay - Medium gray for depth */}
+        <motion.div
+          variants={{
+            initial: { scaleY: 1 },
+            animate: {
+              scaleY: 0,
+              transition: {
+                duration: 1.0,
+                ease: [0.16, 1, 0.3, 1],
+                delay: 0.35,
+              },
+            },
+            exit: {
+              scaleY: 1,
+              transition: {
+                duration: 0.5,
+                ease: [0.16, 1, 0.3, 1],
+              },
+            },
+          }}
+          className="fixed inset-0 z-[98] bg-[#2d2d2d] origin-top pointer-events-none"
         />
 
         {/* Page content */}

@@ -212,31 +212,24 @@ export default function ContactPage({ isDarkMode = false, onToggleDarkMode }) {
               <span className="h-3 w-3 sm:h-4 sm:w-4 rounded bg-gradient-to-br from-indigo-400 to-fuchsia-400" />
             </motion.span>
             <span className={`text-base sm:text-lg transition-colors ${isDarkMode ? 'group-hover:text-indigo-300' : 'group-hover:text-indigo-600'}`}>
-              lackecity
+              Sehat AI
             </span>
           </Link>
 
           {/* Desktop Navigation */}
-          <nav className={`hidden md:flex items-center gap-6 lg:gap-8 text-sm ${isDarkMode ? 'text-white/80' : 'text-gray-600'}`}>
-            {['About', 'Contact'].map((item, i) => (
+          <nav className={`hidden md:flex items-center gap-1 text-sm ${isDarkMode ? 'text-white/80' : 'text-gray-600'}`}>
+            {['Home', 'Articles', 'About', 'Contact'].map((item, i) => (
               <motion.div
                 key={item}
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.1 * i, duration: 0.5 }}
-                whileHover={{ y: -2 }}
               >
                 <Link 
-                  to={item === 'Contact' ? '/contact' : `/${item.toLowerCase()}`} 
-                  className={`relative transition-colors ${item === 'Contact' ? (isDarkMode ? 'text-white' : 'text-gray-900') : (isDarkMode ? 'hover:text-white' : 'hover:text-gray-900')}`}
+                  to={item === 'Home' ? '/' : `/${item.toLowerCase()}`} 
+                  className={`relative px-4 py-2 rounded-xl font-medium transition-all ${item === 'Contact' ? (isDarkMode ? 'text-white bg-white/10' : 'text-gray-900 bg-gray-100') : (isDarkMode ? 'hover:text-white hover:bg-white/10' : 'hover:text-gray-900 hover:bg-gray-100')}`}
                 >
                   {item}
-                  <motion.span
-                    className="absolute -bottom-1 left-0 h-[2px] bg-indigo-400"
-                    initial={{ width: item === 'Contact' ? '100%' : 0 }}
-                    whileHover={{ width: '100%' }}
-                    transition={{ duration: 0.3 }}
-                  />
                 </Link>
               </motion.div>
             ))}
@@ -347,7 +340,7 @@ export default function ContactPage({ isDarkMode = false, onToggleDarkMode }) {
                   <span className={`grid h-8 w-8 place-items-center rounded-xl ${headerBgClass} ring-1 ${headerRingClass}`}>
                     <span className="h-3 w-3 rounded bg-gradient-to-br from-indigo-400 to-fuchsia-400" />
                   </span>
-                  <span className={`text-base ${textPrimaryClass}`}>lackecity</span>
+                  <span className={`text-base ${textPrimaryClass}`}>Sehat AI</span>
                 </Link>
                 <button
                   onClick={() => setMobileMenuOpen(false)}
@@ -359,21 +352,22 @@ export default function ContactPage({ isDarkMode = false, onToggleDarkMode }) {
                 </button>
               </div>
               <nav className="flex flex-col p-4 space-y-1">
-                <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }}>
-                  <Link to="/" className={`${mobileMenuTextClass} ${isDarkMode ? 'hover:text-white hover:bg-white/5' : 'hover:text-gray-900 hover:bg-gray-100'} py-4 px-4 rounded-xl transition-colors text-lg block`} onClick={() => setMobileMenuOpen(false)}>
-                    Home
-                  </Link>
-                </motion.div>
-                <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.15 }}>
-                  <Link to="/about" className={`${mobileMenuTextClass} ${isDarkMode ? 'hover:text-white hover:bg-white/5' : 'hover:text-gray-900 hover:bg-gray-100'} py-4 px-4 rounded-xl transition-colors text-lg block`} onClick={() => setMobileMenuOpen(false)}>
-                    About
-                  </Link>
-                </motion.div>
-                <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }}>
-                  <Link to="/contact" className={`${textPrimaryClass} ${isDarkMode ? 'bg-white/5' : 'bg-indigo-50'} py-4 px-4 rounded-xl transition-colors text-lg block`} onClick={() => setMobileMenuOpen(false)}>
-                    Contact
-                  </Link>
-                </motion.div>
+                {['Home', 'Articles', 'About', 'Contact'].map((item, index) => (
+                  <motion.div 
+                    key={item}
+                    initial={{ opacity: 0, x: -20 }} 
+                    animate={{ opacity: 1, x: 0 }} 
+                    transition={{ delay: 0.05 * index }}
+                  >
+                    <Link 
+                      to={item === 'Home' ? '/' : `/${item.toLowerCase()}`} 
+                      className={`py-4 px-4 rounded-xl transition-colors text-lg block ${item === 'Contact' ? `${textPrimaryClass} ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}` : `${mobileMenuTextClass} ${isDarkMode ? 'hover:text-white hover:bg-white/5' : 'hover:text-gray-900 hover:bg-gray-100'}`}`} 
+                      onClick={() => setMobileMenuOpen(false)}
+                    >
+                      {item}
+                    </Link>
+                  </motion.div>
+                ))}
                 <motion.button
                   onClick={() => onToggleDarkMode?.()}
                   className={`flex items-center justify-between ${isDarkMode ? 'text-white/90 bg-white/5 hover:bg-white/10' : 'text-gray-700 bg-gray-100 hover:bg-gray-200'} py-4 px-4 rounded-xl transition-colors text-lg`}

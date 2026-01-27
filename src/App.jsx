@@ -7,13 +7,14 @@ import Interaction from './components/interaction.jsx'
 import Maps from './components/maps.jsx'
 import ContactPage from './components/ContactPage.jsx'
 import AboutPage from './components/AboutPage.jsx'
+import ArticlesPage from './components/ArticlesPage.jsx'
 import PageTransition from './components/PageTransition.jsx'
 
 function AnimatedRoutes() {
   const [isDarkMode, setIsDarkMode] = useState(() => {
     // Initialize from localStorage synchronously to prevent flash
     if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('lackecity-theme')
+      const stored = localStorage.getItem('sehat-ai-theme')
       return stored === 'dark'
     }
     return false
@@ -22,7 +23,7 @@ function AnimatedRoutes() {
 
   useEffect(() => {
     document.body.classList.toggle('theme-dark', isDarkMode)
-    localStorage.setItem('lackecity-theme', isDarkMode ? 'dark' : 'light')
+    localStorage.setItem('sehat-ai-theme', isDarkMode ? 'dark' : 'light')
   }, [isDarkMode])
 
   const toggleDarkMode = () => setIsDarkMode((prev) => !prev)
@@ -37,7 +38,7 @@ function AnimatedRoutes() {
         } />
         <Route path="/interaction" element={
           <PageTransition>
-            <Interaction isDarkMode={isDarkMode} />
+            <Interaction isDarkMode={isDarkMode} onToggleDarkMode={toggleDarkMode} />
           </PageTransition>
         } />
         <Route path="/maps" element={
@@ -53,6 +54,11 @@ function AnimatedRoutes() {
         <Route path="/contact" element={
           <PageTransition>
             <ContactPage isDarkMode={isDarkMode} onToggleDarkMode={toggleDarkMode} />
+          </PageTransition>
+        } />
+        <Route path="/articles" element={
+          <PageTransition>
+            <ArticlesPage isDarkMode={isDarkMode} onToggleDarkMode={toggleDarkMode} />
           </PageTransition>
         } />
       </Routes>
